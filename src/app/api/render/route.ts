@@ -63,14 +63,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       child.on("error", (err: Error) => reject(err));
     });
 
-    const file: Buffer = await fs.readFile(outputPath);
+    const fileBuffer = await fs.readFile(outputPath);
+    const responseBody = new ArrayBuffer(fileBuffer.byteLength);
+    new Uint8Array(responseBody).set(fileBuffer);
     await fs.rm(tmpDir, { recursive: true, force: true });
 
-    return new NextResponse(file, {
+    return new NextResponse(responseBody, {
       headers: {
         "Content-Type": "video/mp4",
         "Content-Disposition": `attachment; filename=${DEFAULT_VIDEO_NAME}`,
-        "Content-Length": String(file.byteLength),
+        "Content-Length": String(fileBuffer.byteLength),
       },
     });
   } catch (error) {

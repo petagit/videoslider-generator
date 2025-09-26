@@ -2,7 +2,7 @@ import { AbsoluteFill, Audio, Easing, Img, interpolate, useCurrentFrame, useVide
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export interface SliderCompositionProps {
+export interface SliderCompositionProps extends Record<string, unknown> {
   topImages: string[];
   bottomImages: string[];
   audio?: string | null;
