@@ -1,7 +1,32 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  turbopack: {
+    rules: {
+      "*.md": {
+        loaders: [
+          {
+            loader: "builtin:raw",
+            options: {},
+          },
+        ],
+      },
+    },
+    root: "/Users/fengzhiping/video editor",
+  },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      const previous = config.externals ?? [];
+      const normalized = Array.isArray(previous) ? previous : [previous];
+      config.externals = [...normalized, 'esbuild'];
+    }
+    config.module.rules.push({
+      test: /\.md$/i,
+      type: "asset/source",
+    });
+
+    return config;
+  },
 };
 
 export default nextConfig;

@@ -3,17 +3,26 @@
 import { useCallback, useState } from "react";
 
 import { useAppStore } from "../state/store";
+import type { UploadedAudio } from "../state/types";
 
 export function ExportPanel() {
   const format = useAppStore((state) => state.exportOptions.format);
   const setExportFormat = useAppStore((state) => state.setExportFormat);
-  const topImage = useAppStore((state) => state.topImage);
-  const bottomImage = useAppStore((state) => state.bottomImage);
+  const photoPairs = useAppStore((state) => state.photoPairs);
   const overlay = useAppStore((state) => state.overlay);
   const compare = useAppStore((state) => state.compare);
   const animation = useAppStore((state) => state.animation);
+  const audio = useAppStore((state) => state.audio);
+  const setAudio = useAppStore((state) => state.setAudio);
+  const setAnimationDuration = useAppStore((state) => state.setAnimationDuration);
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  const durationSeconds = Math.round(animation.durationMs / 1000);
+
+  const totalPairs = photoPairs.length;
+  const completePairCount = photoPairs.filter((pair) => pair.top && pair.bottom).length;
+  const exportBlocked = totalPairs === 0 || completePairCount !== totalPairs;
 
   const getDataUrl = useCallback(async (file?: File, fallback?: string) => {
     if (file) {
@@ -36,9 +45,19 @@ export function ExportPanel() {
   const runMp4Export = useCallback(async () => {
     setStatus("Preparing assets…");
 
-    const [topDataUrl, bottomDataUrl] = await Promise.all([
-      getDataUrl(topImage?.file, topImage?.src),
-      getDataUrl(bottomImage?.file, bottomImage?.src),
+    if (photoPairs.length === 0) {
+      throw new Error("Add at least one photo pair before exporting.");
+    }
+
+    const completePairs = photoPairs.filter((pair) => pair.top && pair.bottom);
+    if (completePairs.length !== photoPairs.length) {
+      throw new Error("Each pair must include both a top and bottom photo before exporting.");
+    }
+
+    const [topImages, bottomImages, audioDataUrl] = await Promise.all([
+      Promise.all(completePairs.map((pair) => getDataUrl(pair.top!.file, pair.top!.src))),
+      Promise.all(completePairs.map((pair) => getDataUrl(pair.bottom!.file, pair.bottom!.src))),
+      getDataUrl(audio?.file, audio?.src),
     ]);
 
     setStatus("Rendering video via Remotion…");
@@ -47,21 +66,27 @@ export function ExportPanel() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        topImage: topDataUrl,
-        bottomImage: bottomDataUrl,
+        topImages,
+        bottomImages,
         compare: {
           orientation: compare.orientation,
           showDivider: compare.showDivider,
         },
         overlay: {
           markdown: overlay.markdown,
+          fontFamily: overlay.fontFamily,
           fontSizePx: overlay.fontSizePx,
           color: overlay.color,
           background: overlay.background ?? null,
           maxWidthPct: overlay.maxWidthPct,
           align: overlay.align,
+          borderColor: overlay.borderColor,
+          borderWidthPx: overlay.borderWidthPx,
+          borderStyle: overlay.borderStyle,
+          borderRadiusPx: overlay.borderRadiusPx,
         },
         animation,
+        audio: audioDataUrl ?? null,
       }),
     });
 
@@ -75,11 +100,30 @@ export function ExportPanel() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "slider-reveal.mp4";
+    anchor.download = "slider-reveal-tiktok.mp4";
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     setStatus("MP4 exported – check your downloads.");
-  }, [animation, compare.orientation, compare.showDivider, getDataUrl, overlay.align, overlay.background, overlay.color, overlay.fontSizePx, overlay.markdown, overlay.maxWidthPct, topImage?.file, topImage?.src, bottomImage?.file, bottomImage?.src]);
+  }, [
+    animation,
+    compare.orientation,
+    compare.showDivider,
+    getDataUrl,
+    overlay.align,
+    overlay.background,
+    overlay.borderColor,
+    overlay.borderRadiusPx,
+    overlay.borderStyle,
+    overlay.borderWidthPx,
+    overlay.color,
+    overlay.fontFamily,
+    overlay.fontSizePx,
+    overlay.markdown,
+    overlay.maxWidthPct,
+    photoPairs,
+    audio?.file,
+    audio?.src,
+  ]);
 
   const handleExport = useCallback(async () => {
     if (isExporting) {
@@ -95,6 +139,11 @@ export function ExportPanel() {
         return;
       }
 
+      if (exportBlocked) {
+        setStatus("Add matching top and bottom photos for every pair before exporting.");
+        return;
+      }
+
       await runMp4Export();
     } catch (error) {
       console.error(error);
@@ -107,7 +156,7 @@ export function ExportPanel() {
     } finally {
       setIsExporting(false);
     }
-  }, [format, isExporting, runMp4Export]);
+  }, [exportBlocked, format, isExporting, runMp4Export]);
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/40">
@@ -123,6 +172,36 @@ export function ExportPanel() {
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-500">
+            Background music (optional)
+          </span>
+          <input
+            type="file"
+            accept="audio/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) {
+                setAudio(undefined);
+                return;
+              }
+              const src = URL.createObjectURL(file);
+              const audioPayload: UploadedAudio = {
+                id: `${Date.now()}`,
+                file,
+                src,
+                name: file.name,
+              };
+              setAudio(audioPayload);
+            }}
+            className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none"
+          />
+          {audio ? (
+            <span className="text-xs text-slate-400">{audio.name}</span>
+          ) : (
+            <span className="text-xs text-slate-500">MP3/WAV/M4A</span>
+          )}
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-500">
             Format
           </span>
           <select
@@ -130,21 +209,45 @@ export function ExportPanel() {
             onChange={(event) => setExportFormat(event.target.value as typeof format)}
             className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none"
           >
-            <option value="mp4">MP4 (3s loop)</option>
+            <option value="mp4">MP4 (sequential cuts)</option>
             <option value="png">PNG (coming soon)</option>
             <option value="jpeg">JPEG (coming soon)</option>
             <option value="webp">WebP (coming soon)</option>
           </select>
         </label>
 
+        <label className="flex flex-col gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-500">
+            Video length
+          </span>
+          <input
+            type="range"
+            min={3}
+            max={60}
+            step={1}
+            value={durationSeconds}
+            onChange={(event) => setAnimationDuration(Number(event.target.value) * 1000)}
+            className="accent-sky-500"
+          />
+          <span className="text-xs text-slate-300">{durationSeconds} second{durationSeconds === 1 ? "" : "s"}</span>
+        </label>
+
         <button
           type="button"
           onClick={() => void handleExport()}
           className="inline-flex items-center justify-center rounded-full bg-sky-500/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-sky-100 shadow-inner shadow-sky-500/20 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={isExporting}
+          disabled={isExporting || exportBlocked}
         >
           {isExporting ? "Exporting…" : "Export preview"}
         </button>
+
+        {exportBlocked ? (
+          <p className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-200">
+            Add matching top and bottom photos for every pair to enable exporting.
+          </p>
+        ) : (
+          <p className="text-[11px] text-slate-400">{completePairCount} photo pair{completePairCount === 1 ? "" : "s"} will render sequentially.</p>
+        )}
 
         {status ? (
           <p className="rounded-xl border border-dashed border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-300">

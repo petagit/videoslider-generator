@@ -3,16 +3,22 @@
 
 import { CSSProperties, useEffect, useMemo } from "react";
 import { motion, useMotionTemplate, useSpring, useTransform } from "motion/react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components as MarkdownComponents } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../state/store";
 
 export function PreviewStage() {
-  const topImage = useAppStore((state) => state.topImage);
-  const bottomImage = useAppStore((state) => state.bottomImage);
+  const photoPairs = useAppStore((state) => state.photoPairs);
+  const activePairIndex = useAppStore((state) => state.activePairIndex);
   const compare = useAppStore((state) => state.compare);
   const overlay = useAppStore((state) => state.overlay);
   const setSliderPct = useAppStore((state) => state.setSliderPct);
+
+  const activePair = photoPairs[activePairIndex] ?? photoPairs[0];
+  const topImage = activePair?.top;
+  const bottomImage = activePair?.bottom;
+  const totalPairs = photoPairs.length;
+  const displayPairNumber = totalPairs > 0 ? Math.min(activePairIndex + 1, totalPairs) : 1;
 
   const sliderSpring = useSpring(compare.sliderPct, { stiffness: 90, damping: 18, mass: 0.8 });
 
@@ -38,10 +44,12 @@ export function PreviewStage() {
     const base: CSSProperties = {
       maxWidth: `${overlay.maxWidthPct}%`,
       fontSize: `${overlay.fontSizePx}px`,
+      fontFamily: overlay.fontFamily,
+      fontWeight: 700,
       color: overlay.color,
       backgroundColor: overlay.background ?? "transparent",
       padding: overlay.background ? "1rem" : "0",
-      borderRadius: overlay.background ? "0.75rem" : "0",
+      borderRadius: `${overlay.borderRadiusPx}px`,
     };
 
     if (overlay.align === "center") {
@@ -59,7 +67,31 @@ export function PreviewStage() {
     }
 
     return base;
-  }, [overlay.align, overlay.background, overlay.color, overlay.fontSizePx, overlay.maxWidthPct]);
+  }, [
+    overlay.align,
+    overlay.background,
+    overlay.borderRadiusPx,
+    overlay.color,
+    overlay.fontFamily,
+    overlay.fontSizePx,
+    overlay.maxWidthPct,
+  ]);
+
+  const textStroke = useMemo(() => {
+    if (overlay.borderStyle === "none" || overlay.borderWidthPx === 0) return undefined;
+    return `${overlay.borderWidthPx}px ${overlay.borderColor}`;
+  }, [overlay.borderColor, overlay.borderStyle, overlay.borderWidthPx]);
+
+  const components = useMemo<MarkdownComponents>(() => ({
+    h1: ({ node: _n, ref: _r, ...props }) => <h1 style={{ WebkitTextStroke: textStroke }} {...props} />,
+    h2: ({ node: _n, ref: _r, ...props }) => <h2 style={{ WebkitTextStroke: textStroke }} {...props} />,
+    h3: ({ node: _n, ref: _r, ...props }) => <h3 style={{ WebkitTextStroke: textStroke }} {...props} />,
+    h4: ({ node: _n, ref: _r, ...props }) => <h4 style={{ WebkitTextStroke: textStroke }} {...props} />,
+    p: ({ node: _n, ref: _r, ...props }) => <p style={{ WebkitTextStroke: textStroke }} {...props} />,
+    ul: ({ node: _n, ref: _r, ...props }) => <ul style={{ WebkitTextStroke: textStroke }} {...props} />,
+    ol: ({ node: _n, ref: _r, ...props }) => <ol style={{ WebkitTextStroke: textStroke }} {...props} />,
+    a: ({ node: _n, ref: _r, ...props }) => <a style={{ WebkitTextStroke: textStroke }} {...props} />,
+  }), [textStroke]);
 
   return (
     <div className="flex h-full flex-col gap-6 rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.8)]">
@@ -74,6 +106,12 @@ export function PreviewStage() {
           Drag the slider to test the mask. Drop your own images on the left to see this stage
           update instantly.
         </p>
+        <div className="mt-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-500">
+          <span>Active pair</span>
+          <span className="rounded-full bg-slate-800 px-3 py-1 text-slate-200">
+            {totalPairs > 0 ? `${Math.min(activePairIndex + 1, totalPairs)} / ${totalPairs}` : "—"}
+          </span>
+        </div>
       </header>
 
       <div className="relative w-full flex-1">
@@ -89,7 +127,7 @@ export function PreviewStage() {
               className="absolute inset-0 h-full w-full object-cover"
             />
           ) : (
-            <Placeholder label="Bottom image" position="bottom" />
+            <Placeholder label={`Bottom photo ${displayPairNumber}`} position="bottom" />
           )}
 
           {topImage ? (
@@ -101,11 +139,11 @@ export function PreviewStage() {
               style={{ clipPath }}
             />
           ) : (
-            <Placeholder label="Top image" position="top" clipPath={clipPathFallback} />
+            <Placeholder label={`Top photo ${displayPairNumber}`} position="top" clipPath={clipPathFallback} />
           )}
 
           <motion.div
-            className="pointer-events-none absolute bg-sky-400/70"
+            className="pointer-events-none absolute bg-transparent"
             style={
               compare.showDivider
                 ? compare.orientation === "vertical"
@@ -118,7 +156,9 @@ export function PreviewStage() {
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-10">
             <div style={overlayStyles} className="markdown-preview">
               {overlay.markdown.trim() ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{overlay.markdown}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+                  {overlay.markdown}
+                </ReactMarkdown>
               ) : (
                 <p className="text-sm text-slate-400">
                   Start typing Markdown in the overlay panel to see it land here.

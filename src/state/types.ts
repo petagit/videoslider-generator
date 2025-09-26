@@ -7,6 +7,19 @@ export interface UploadedImage {
   naturalHeight: number;
 }
 
+export interface PhotoPair {
+  id: string;
+  top?: UploadedImage;
+  bottom?: UploadedImage;
+}
+
+export interface UploadedAudio {
+  id: string;
+  file: File;
+  src: string;
+  name: string;
+}
+
 export interface OverlayTextStyle {
   markdown: string;
   position: { xPct: number; yPct: number };
@@ -16,6 +29,10 @@ export interface OverlayTextStyle {
   color: string;
   background?: string;
   align: "left" | "center" | "right";
+  borderColor: string;
+  borderWidthPx: number;
+  borderStyle: "none" | "solid" | "dashed" | "dotted";
+  borderRadiusPx: number;
 }
 
 export interface CompareSettings {
@@ -55,8 +72,9 @@ export interface VideoExportOptions {
 }
 
 export interface AppState {
-  topImage?: UploadedImage;
-  bottomImage?: UploadedImage;
+  photoPairs: PhotoPair[];
+  activePairIndex: number;
+  audio?: UploadedAudio;
   overlay: OverlayTextStyle;
   compare: CompareSettings;
   exportOptions: ExportOptions;

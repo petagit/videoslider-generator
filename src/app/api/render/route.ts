@@ -2,37 +2,68 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
-import { bundle } from "@remotion/bundler";
-import { renderMedia } from "@remotion/renderer";
+import { spawn } from "node:child_process";
 
 import type { SliderCompositionProps } from "../../../../remotion/SliderComposition";
 
 export const dynamic = "force-dynamic";
 
-const REMOTION_ROOT = path.join(process.cwd(), "remotion");
-const ENTRY_POINT = path.join(REMOTION_ROOT, "index.ts");
+const DEFAULT_VIDEO_NAME = "slider-reveal-tiktok.mp4";
 
-const DEFAULT_VIDEO_NAME = "slider-reveal.mp4";
-
-export async function POST(request: NextRequest) {
+export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const payload = (await request.json()) as SliderCompositionProps;
+    const payload = (await request.json()) as SliderCompositionProps & { audio?: string | null };
 
-    const bundleLocation = await bundle({ entryPoint: ENTRY_POINT, outDir: undefined });
+    const tmpDir: string = await fs.mkdtemp(path.join(os.tmpdir(), "slider-render-"));
+    // If audio is a remote URL, fetch it and convert to data URL so Chromium can load it without CORS issues
+    let audioDataUrl: string | null = payload.audio ?? null;
+    if (audioDataUrl && /^https?:\/\//i.test(audioDataUrl)) {
+      try {
+        const res = await fetch(audioDataUrl);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const mime = res.headers.get("content-type") ?? "audio/mpeg";
+        audioDataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+      } catch {
+        audioDataUrl = null;
+      }
+    }
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "slider-render-"));
-    const outputLocation = path.join(tmpDir, DEFAULT_VIDEO_NAME);
+    const payloadPath: string = path.join(tmpDir, "payload.json");
+    await fs.writeFile(payloadPath, JSON.stringify({ ...payload, audio: audioDataUrl }), "utf-8");
 
-    await renderMedia({
-      serveUrl: bundleLocation,
-      compositionId: "slider-reveal",
-      codec: "h264",
-      outputLocation,
-      inputProps: payload,
-      onDownload: () => undefined,
+    const scriptPath: string = path.join(process.cwd(), "scripts", "render.js");
+
+    const outputPath: string = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [scriptPath, payloadPath, DEFAULT_VIDEO_NAME], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+        env: process.env,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d: Buffer) => {
+        stdout += d.toString();
+      });
+      child.stderr.on("data", (d: Buffer) => {
+        stderr += d.toString();
+      });
+      child.on("close", (code: number) => {
+        if (code === 0) {
+          const lastLine = stdout.trim().split("\n").pop() ?? "";
+          if (lastLine.startsWith("/")) {
+            resolve(lastLine);
+          } else {
+            reject(new Error(`Unexpected child output: ${lastLine}`));
+          }
+        } else {
+          reject(new Error(`Render process exited with code ${code}: ${stderr}`));
+        }
+      });
+      child.on("error", (err: Error) => reject(err));
     });
 
-    const file = await fs.readFile(outputLocation);
+    const file: Buffer = await fs.readFile(outputPath);
     await fs.rm(tmpDir, { recursive: true, force: true });
 
     return new NextResponse(file, {

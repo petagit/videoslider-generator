@@ -1,21 +1,27 @@
-import { AbsoluteFill, Easing, Img, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Audio, Easing, Img, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 export interface SliderCompositionProps {
-  topImage: string;
-  bottomImage: string;
+  topImages: string[];
+  bottomImages: string[];
+  audio?: string | null;
   compare: {
     orientation: "vertical" | "horizontal";
     showDivider: boolean;
   };
   overlay: {
     markdown: string;
+    fontFamily: string;
     fontSizePx: number;
     color: string;
     background: string | null;
     maxWidthPct: number;
     align: "left" | "center" | "right";
+    borderColor?: string;
+    borderWidthPx?: number;
+    borderStyle?: "none" | "solid" | "dashed" | "dotted";
+    borderRadiusPx?: number;
   };
   animation: {
     durationMs: number;
@@ -56,27 +62,32 @@ const overlayStyle = {
     lineHeight: 1.5,
     margin: 0,
   } satisfies React.CSSProperties,
-  heading: {
+  heading: (stroke?: string) => ({
     fontWeight: 700,
     letterSpacing: "-0.01em",
     margin: 0,
-  } satisfies React.CSSProperties,
-  paragraph: {
+    WebkitTextStroke: stroke,
+  } satisfies React.CSSProperties),
+  paragraph: (stroke?: string) => ({
     margin: 0,
-  } satisfies React.CSSProperties,
-  list: {
+    WebkitTextStroke: stroke,
+  } satisfies React.CSSProperties),
+  list: (stroke?: string) => ({
     margin: 0,
     paddingLeft: "1.25em",
-  } satisfies React.CSSProperties,
-  link: {
+    WebkitTextStroke: stroke,
+  } satisfies React.CSSProperties),
+  link: (stroke?: string) => ({
     color: "#38bdf8",
     textDecoration: "underline",
-  } satisfies React.CSSProperties,
+    WebkitTextStroke: stroke,
+  } satisfies React.CSSProperties),
 };
 
 export const SliderComposition: React.FC<SliderCompositionProps> = ({
-  topImage,
-  bottomImage,
+  topImages,
+  bottomImages,
+  audio,
   compare,
   overlay,
   animation,
@@ -84,16 +95,28 @@ export const SliderComposition: React.FC<SliderCompositionProps> = ({
   const frame = useCurrentFrame();
   const { durationInFrames, width, height } = useVideoConfig();
 
-  const progress = (() => {
-    const base = interpolate(frame, [0, durationInFrames - 1], [0, 1], {
-      easing: easingMap[animation.easing],
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    });
-    return directionMap(animation.direction, base);
-  })();
+  const framesPerSegment = Math.max(1, Math.round((animation.durationMs / 1000) * animation.frameRate));
+  const pairCount = Math.min(topImages.length, bottomImages.length);
+  const fallbackCount = Math.max(pairCount, 1);
+  const currentSegment = Math.min(fallbackCount - 1, Math.floor(frame / framesPerSegment));
+  const frameWithinSegment = Math.min(
+    Math.max(frame - currentSegment * framesPerSegment, 0),
+    framesPerSegment - 1,
+  );
 
+  const easedProgress = framesPerSegment <= 1
+    ? 1
+    : interpolate(frameWithinSegment, [0, framesPerSegment - 1], [0, 1], {
+        easing: easingMap[animation.easing],
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      });
+
+  const progress = directionMap(animation.direction, easedProgress);
   const percentage = progress * 100;
+
+  const currentTopImage = topImages[currentSegment] ?? topImages[topImages.length - 1] ?? "";
+  const currentBottomImage = bottomImages[currentSegment] ?? bottomImages[bottomImages.length - 1] ?? "";
 
   const clipPath = compare.orientation === "vertical"
     ? `polygon(0 0, ${percentage}% 0, ${percentage}% 100%, 0 100%)`
@@ -124,28 +147,51 @@ export const SliderComposition: React.FC<SliderCompositionProps> = ({
   const overlayBoxStyle: React.CSSProperties = {
     maxWidth: `${overlay.maxWidthPct}%`,
     fontSize: `${overlay.fontSizePx}px`,
+    fontFamily: overlay.fontFamily,
+    fontWeight: 700,
     color: overlay.color,
     backgroundColor: overlay.background ?? "transparent",
     padding: overlay.background ? "32px" : "0",
-    borderRadius: overlay.background ? "24px" : "0",
+    borderRadius: `${overlay.borderRadiusPx ?? 0}px`,
     textAlign: overlay.align,
     marginLeft: overlay.align === "left" ? 0 : overlay.align === "center" ? "auto" : "auto",
     marginRight: overlay.align === "right" ? 0 : overlay.align === "center" ? "auto" : "auto",
   };
 
+  const textStroke = overlay.borderStyle && overlay.borderStyle !== "none" && (overlay.borderWidthPx ?? 0) > 0
+    ? `${overlay.borderWidthPx}px ${overlay.borderColor ?? "#000"}`
+    : undefined;
+
   return (
     <AbsoluteFill style={{ backgroundColor: "#020617" }}>
+      {audio ? (
+        <Audio
+          src={audio}
+          trimBefore={0}
+          trimAfter={durationInFrames}
+          volume={1}
+          useWebAudioApi
+        />
+      ) : null}
       <AbsoluteFill style={{ transform: "scale(1.02)" }}>
-        {bottomImage ? (
-          <Img src={bottomImage} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        {currentBottomImage ? (
+          <Img
+            key={`bottom-${currentSegment}`}
+            src={currentBottomImage}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
         ) : (
           <AbsoluteFill style={{ background: "linear-gradient(135deg,#1f2937,#0f172a)" }} />
         )}
       </AbsoluteFill>
 
       <AbsoluteFill style={{ clipPath, transform: "scale(1.02)" }}>
-        {topImage ? (
-          <Img src={topImage} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        {currentTopImage ? (
+          <Img
+            key={`top-${currentSegment}`}
+            src={currentTopImage}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
         ) : (
           <AbsoluteFill style={{ background: "linear-gradient(135deg,#312e81,#0f172a)" }} />
         )}
@@ -156,7 +202,7 @@ export const SliderComposition: React.FC<SliderCompositionProps> = ({
           style={{
             pointerEvents: "none",
             ...dividerStyle,
-            backgroundColor: "rgba(56,189,248,0.75)",
+            backgroundColor: "transparent",
             transform: compare.orientation === "vertical" ? "translateX(-2px)" : "translateY(-2px)",
           }}
         />
@@ -175,14 +221,14 @@ export const SliderComposition: React.FC<SliderCompositionProps> = ({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                h1: (props) => <h1 style={overlayStyle.heading} {...props} />,
-                h2: (props) => <h2 style={overlayStyle.heading} {...props} />,
-                h3: (props) => <h3 style={overlayStyle.heading} {...props} />,
-                h4: (props) => <h4 style={overlayStyle.heading} {...props} />,
-                p: (props) => <p style={overlayStyle.paragraph} {...props} />,
-                ul: (props) => <ul style={overlayStyle.list} {...props} />,
-                ol: (props) => <ol style={overlayStyle.list} {...props} />,
-                a: (props) => <a style={overlayStyle.link} {...props} />,
+                h1: (props) => <h1 style={overlayStyle.heading(textStroke)} {...props} />,
+                h2: (props) => <h2 style={overlayStyle.heading(textStroke)} {...props} />,
+                h3: (props) => <h3 style={overlayStyle.heading(textStroke)} {...props} />,
+                h4: (props) => <h4 style={overlayStyle.heading(textStroke)} {...props} />,
+                p: (props) => <p style={overlayStyle.paragraph(textStroke)} {...props} />,
+                ul: (props) => <ul style={overlayStyle.list(textStroke)} {...props} />,
+                ol: (props) => <ol style={overlayStyle.list(textStroke)} {...props} />,
+                a: (props) => <a style={overlayStyle.link(textStroke)} {...props} />,
               }}
             >
               {overlay.markdown}
