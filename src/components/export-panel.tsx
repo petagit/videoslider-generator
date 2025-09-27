@@ -189,6 +189,7 @@ export function ExportPanel() {
                 file,
                 src,
                 name: file.name,
+                origin: "upload",
               };
               setAudio(audioPayload);
             }}

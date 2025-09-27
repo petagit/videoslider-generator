@@ -15,9 +15,10 @@ export interface PhotoPair {
 
 export interface UploadedAudio {
   id: string;
-  file: File;
+  file?: File;
   src: string;
   name: string;
+  origin: "upload" | "preset";
 }
 
 export interface OverlayTextStyle {

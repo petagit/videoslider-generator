@@ -1,17 +1,26 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { ChangeEvent, DragEvent, MouseEvent, useCallback, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, MouseEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../state/store";
 import type { UploadedImage } from "../state/types";
 
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"];
+const MAX_PAIRS = 4;
+const PREVIEW_SIZE_CLASS = "h-32"; // consistent drop zone height to avoid scrolling
 
 type SlotKind = "top" | "bottom";
 
 interface DragTarget {
   pairIndex: number;
   slot: SlotKind;
+}
+
+interface MusicPreset {
+  id: string;
+  name: string;
+  filename: string;
+  url: string;
 }
 
 const loadImageDimensions = async (src: string) =>
@@ -37,29 +46,24 @@ const buildUploadedImage = async (file: File): Promise<UploadedImage> => {
 
 const imagePreview = (image?: UploadedImage) => {
   if (!image) {
-    return <span className="text-xs font-medium text-slate-400">Drop image or browse</span>;
+    return (
+      <div
+        className={`flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-slate-800/80 bg-slate-950/70 text-xs font-medium text-slate-400 ${PREVIEW_SIZE_CLASS}`}
+      >
+        <span>Drop image</span>
+        <span className="text-[10px] uppercase tracking-[0.3em] text-slate-500">or browse</span>
+      </div>
+    );
   }
 
-  return (
-    <div className="flex w-full flex-col gap-2">
-      <img src={image.src} alt={image.alt} className="h-32 w-full rounded-md object-cover" />
-      <div className="text-[11px] font-medium leading-tight text-slate-300">
-        <p className="truncate">{image.alt}</p>
-        <p>
-          {image.naturalWidth} × {image.naturalHeight}
-        </p>
-      </div>
-    </div>
-  );
+  return <img src={image.src} alt={image.alt} className={`${PREVIEW_SIZE_CLASS} w-full rounded-lg object-cover`} />;
 };
-
-const slotLabel = (slot: SlotKind, index: number) =>
-  `${slot === "top" ? "Top" : "Bottom"} photo ${index + 1}`;
 
 export function MediaPanel() {
   const photoPairs = useAppStore((state) => state.photoPairs);
   const activePairIndex = useAppStore((state) => state.activePairIndex);
   const compare = useAppStore((state) => state.compare);
+  const audio = useAppStore((state) => state.audio);
   const setPhotoAt = useAppStore((state) => state.setPhotoAt);
   const addPhotoPair = useAppStore((state) => state.addPhotoPair);
   const removePhotoPair = useAppStore((state) => state.removePhotoPair);
@@ -67,8 +71,63 @@ export function MediaPanel() {
   const clearImages = useAppStore((state) => state.clearImages);
   const setOrientation = useAppStore((state) => state.setOrientation);
   const toggleDivider = useAppStore((state) => state.toggleDivider);
+  const setAudio = useAppStore((state) => state.setAudio);
 
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [musicPresets, setMusicPresets] = useState<MusicPreset[]>([]);
+  const [isLoadingPresets, setIsLoadingPresets] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
+
+  const displayPairs = useMemo(() => photoPairs.slice(0, MAX_PAIRS), [photoPairs]);
+  const canAddPair = photoPairs.length < MAX_PAIRS;
+  const readyPairCount = useMemo(
+    () => photoPairs.filter((pair) => pair.top && pair.bottom).length,
+    [photoPairs],
+  );
+  const truncatedPairCount = Math.max(0, photoPairs.length - displayPairs.length);
+  const activePairNumber = photoPairs.length > 0 ? Math.min(activePairIndex, photoPairs.length - 1) + 1 : 1;
+
+  const fetchMusicPresets = useCallback(
+    async (signal?: AbortSignal) => {
+      setIsLoadingPresets(true);
+      try {
+        const response = await fetch("/api/music-presets", { signal });
+        if (!response?.ok) {
+          throw new Error("Failed to load music presets.");
+        }
+        const payload = (await response.json()) as { presets?: MusicPreset[] };
+        if (signal?.aborted) {
+          return;
+        }
+        setMusicPresets(payload.presets ?? []);
+        setPresetError(null);
+      } catch (error) {
+        if ((error as Error)?.name === "AbortError") {
+          return;
+        }
+        console.error("Failed to load music presets", error);
+        setMusicPresets([]);
+        setPresetError("Unable to load music presets. Add files to public/music-presets.");
+      } finally {
+        if (!signal?.aborted) {
+          setIsLoadingPresets(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isModalOpen) {
+      return;
+    }
+
+    const controller = new AbortController();
+    void fetchMusicPresets(controller.signal);
+
+    return () => controller.abort();
+  }, [fetchMusicPresets, isModalOpen]);
 
   const assignImage = useCallback(
     async (pairIndex: number, slot: SlotKind, file?: File) => {
@@ -116,129 +175,361 @@ export function MediaPanel() {
     [setPhotoAt],
   );
 
+  const handleSelectPreset = useCallback(
+    (preset: MusicPreset) => {
+      setAudio({
+        id: `preset-${preset.id}`,
+        src: preset.url,
+        name: preset.name,
+        origin: "preset",
+      });
+    },
+    [setAudio],
+  );
+
+  const clearAudioSelection = useCallback(() => {
+    setAudio(undefined);
+  }, [setAudio]);
+
   const hasIncompletePair = useMemo(
     () => photoPairs.some((pair) => !pair.top || !pair.bottom),
     [photoPairs],
   );
 
+const mediaModal = !isModalOpen
+    ? null
+    : (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl shadow-slate-950/40"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-5 py-5 sm:px-6">
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-col gap-1 pr-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-200">Media uploader</h3>
+                  <p className="text-xs text-slate-400">
+                    Drag and drop images into each slot or browse from your computer. You can add up to four photo pairs.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="shrink-0 rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {displayPairs.map((pair, index) => {
+                    const topImage = pair.top;
+                    const bottomImage = pair.bottom;
+                    const isActive = activePairIndex === index;
+                    return (
+                      <div
+                        key={pair.id}
+                        className={`flex flex-col gap-2.5 rounded-2xl border border-slate-800 bg-slate-950/50 p-3 transition ${
+                          isActive ? "border-sky-400 shadow-inner shadow-sky-500/20" : ""
+                        }`}
+                      >
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-slate-500">
+                            Photo 1 drag or upload photo
+                          </span>
+                          <label
+                            onDrop={(event) => void handleDrop(event, index, "top")}
+                            onDragOver={(event) => handleDragOver(event, index, "top")}
+                            onDragLeave={handleDragLeave}
+                            className={`group relative flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-slate-700 bg-slate-950/70 text-center transition ${
+                              dragTarget?.pairIndex === index && dragTarget.slot === "top"
+                                ? "border-sky-400 text-sky-200"
+                                : "hover:border-slate-500 hover:text-slate-200"
+                            }`}
+                          >
+                            <input
+                              type="file"
+                              accept={ACCEPTED_TYPES.join(",")}
+                              className="hidden"
+                              onChange={(event) => void handleFileInput(event, index, "top")}
+                            />
+                            {imagePreview(topImage)}
+                            {topImage ? (
+                              <button
+                                type="button"
+                                onClick={(event) => handleRemoveImage(event, index, "top")}
+                                className="absolute right-2 top-2 rounded-full bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-200 transition hover:bg-slate-800"
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </label>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-slate-500">
+                            Photo 2 drag or upload photo
+                          </span>
+                          <label
+                            onDrop={(event) => void handleDrop(event, index, "bottom")}
+                            onDragOver={(event) => handleDragOver(event, index, "bottom")}
+                            onDragLeave={handleDragLeave}
+                            className={`group relative flex aspect-square w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-slate-700 bg-slate-950/70 text-center transition ${
+                              dragTarget?.pairIndex === index && dragTarget.slot === "bottom"
+                                ? "border-sky-400 text-sky-200"
+                                : "hover:border-slate-500 hover:text-slate-200"
+                            }`}
+                          >
+                            <input
+                              type="file"
+                              accept={ACCEPTED_TYPES.join(",")}
+                              className="hidden"
+                              onChange={(event) => void handleFileInput(event, index, "bottom")}
+                            />
+                            {imagePreview(bottomImage)}
+                            {bottomImage ? (
+                              <button
+                                type="button"
+                                onClick={(event) => handleRemoveImage(event, index, "bottom")}
+                                className="absolute right-2 top-2 rounded-full bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-200 transition hover:bg-slate-800"
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setActivePairIndex(index)}
+                            className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] transition ${
+                              isActive
+                                ? "bg-sky-500/30 text-sky-100"
+                                : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                            }`}
+                          >
+                            Preview pair
+                          </button>
+                          {photoPairs.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => removePhotoPair(index)}
+                              className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+                            >
+                              Remove pair
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2.5">
+                  <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-slate-500">
+                    Music library
+                  </span>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {isLoadingPresets ? (
+                      <div className="col-span-full rounded-xl border border-dashed border-slate-800 bg-slate-950/50 p-4 text-center text-[11px] text-slate-400">
+                        Loading presets…
+                      </div>
+                    ) : musicPresets.length > 0 ? (
+                      musicPresets.map((preset) => {
+                        const isSelected = audio?.origin === "preset" && audio?.id === `preset-${preset.id}`;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => handleSelectPreset(preset)}
+                            className={`relative flex aspect-square w-full items-center justify-center rounded-xl border border-dashed px-3 text-center text-xs font-semibold uppercase tracking-[0.25em] transition ${
+                              isSelected
+                                ? "border-sky-400 bg-sky-500/20 text-sky-100"
+                                : "border-slate-700 bg-slate-950/70 text-slate-300 hover:border-slate-500 hover:text-slate-100"
+                            }`}
+                          >
+                            <span className="line-clamp-2">{preset.name}</span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-full rounded-xl border border-dashed border-slate-800 bg-slate-950/50 p-4 text-center text-[11px] text-slate-500">
+                        Drop audio files into <code className="font-mono text-slate-400">public/music-presets</code> and reopen this modal.
+                      </div>
+                    )}
+                  </div>
+                  {presetError ? (
+                    <p className="text-[11px] text-rose-300">{presetError}</p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500">
+                      MP3, WAV, AAC, OGG, or FLAC files placed in <code className="font-mono text-slate-400">public/music-presets</code> will appear here.
+                    </p>
+                  )}
+                  {audio ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+                      <span className="truncate">
+                        {audio.origin === "preset" ? `Preset selected: ${audio.name}` : `Uploaded track: ${audio.name}`}
+                      </span>
+                      <button
+                        type="button"
+                          onClick={clearAudioSelection}
+                          className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+                        >
+                          Remove audio
+                        </button>
+                      </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-500">No music selected.</p>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {displayPairs.map((pair, index) => (
+                      <div
+                        key={`${pair.id}-chip`}
+                        className={`flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] ${
+                          activePairIndex === index
+                            ? "border-sky-400 bg-sky-500/20 text-sky-100"
+                            : "border-slate-700 bg-slate-900 text-slate-300"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setActivePairIndex(index)}
+                          className="transition hover:text-white"
+                        >
+                          Pair {index + 1}
+                        </button>
+                        {photoPairs.length > 1 ? (
+                          <button
+                            type="button"
+                            onClick={() => removePhotoPair(index)}
+                            className="text-slate-400 transition hover:text-rose-300"
+                            aria-label={`Remove pair ${index + 1}`}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={addPhotoPair}
+                      disabled={!canAddPair}
+                      className="rounded-full border border-slate-700 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-200 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {canAddPair ? "Add photo pair" : "Max pairs reached"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsModalOpen(false)}
+                      className="rounded-full bg-sky-500/20 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-sky-100 transition hover:bg-sky-500/30"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/40">
-      <header className="mb-4 flex items-center justify-between">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-300">Media</h2>
           <p className="text-xs text-slate-400">Upload matching photo pairs to build sequential cuts.</p>
         </div>
-        <button
-          type="button"
-          onClick={clearImages}
-          className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300 transition hover:border-slate-500 hover:text-white"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            className="rounded-full bg-slate-800 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:bg-slate-700"
+          >
+            Manage uploads
+          </button>
+          <button
+            type="button"
+            onClick={clearImages}
+            className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300 transition hover:border-slate-500 hover:text-white"
+          >
+            Clear
+          </button>
+        </div>
       </header>
 
-      <div className="flex flex-col gap-4">
-        {photoPairs.map((pair, index) => {
-          const topImage = pair.top;
-          const bottomImage = pair.bottom;
-          const isComplete = Boolean(topImage && bottomImage);
-          return (
-            <div key={pair.id} className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
-                    Pair {index + 1}
-                  </span>
+      <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-slate-300">
+            {readyPairCount} of {photoPairs.length} pair{photoPairs.length === 1 ? "" : "s"} ready for preview.
+          </p>
+          <p className="text-[11px] text-slate-500">Active pair {activePairNumber}</p>
+          {truncatedPairCount > 0 ? (
+            <p className="text-[11px] text-amber-300">
+              Showing the first {MAX_PAIRS} pairs. Remove extras to edit additional uploads.
+            </p>
+          ) : null}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {photoPairs.map((pair, index) => {
+            const isActive = activePairIndex === index;
+            const isComplete = Boolean(pair.top && pair.bottom);
+            return (
+              <div
+                key={pair.id}
+                className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] ${
+                  isActive
+                    ? "border-sky-400 bg-sky-500/20 text-sky-100"
+                    : "border-slate-700 bg-slate-900 text-slate-300"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setActivePairIndex(index)}
+                  className={`flex items-center gap-2 transition ${isActive ? "" : "hover:text-white"}`}
+                >
+                  Pair {index + 1}
                   <span
-                    className={`text-[10px] font-semibold uppercase tracking-[0.25em] ${isComplete ? "text-emerald-300" : "text-amber-300"}`}
-                  >
-                    {isComplete ? "Ready" : "Add both photos"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
+                    className={`h-2 w-2 rounded-full ${isComplete ? "bg-emerald-400" : "bg-amber-400"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                {photoPairs.length > 1 ? (
                   <button
                     type="button"
-                    onClick={() => setActivePairIndex(index)}
-                    className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] transition ${
-                      activePairIndex === index
-                        ? "bg-sky-500/30 text-sky-100"
-                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                    }`}
+                    onClick={() => removePhotoPair(index)}
+                    className="text-slate-400 transition hover:text-rose-300"
+                    aria-label={`Remove pair ${index + 1}`}
                   >
-                    Preview
+                    ×
                   </button>
-                  {photoPairs.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => removePhotoPair(index)}
-                      className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
-                    >
-                      Remove
-                    </button>
-                  ) : null}
-                </div>
+                ) : null}
               </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                {( [
-                  ["top", topImage],
-                  ["bottom", bottomImage],
-                ] as const ).map(([slot, image]) => {
-                  const isDragging = dragTarget?.pairIndex === index && dragTarget.slot === slot;
-                  return (
-                    <label
-                      key={slot}
-                      onDrop={(event) => void handleDrop(event, index, slot)}
-                      onDragOver={(event) => handleDragOver(event, index, slot)}
-                      onDragLeave={handleDragLeave}
-                      className={`flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-4 text-center transition hover:border-slate-500 ${
-                        isDragging ? "border-sky-400 text-sky-200" : "text-slate-400"
-                      }`}
-                    >
-                      <input
-                        type="file"
-                        accept={ACCEPTED_TYPES.join(",")}
-                        className="hidden"
-                        onChange={(event) => void handleFileInput(event, index, slot)}
-                      />
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-500">
-                        {slotLabel(slot, index)}
-                      </span>
-                      <div className="relative w-full">
-                        {imagePreview(image)}
-                        {image ? (
-                          <button
-                            type="button"
-                            onClick={(event) => handleRemoveImage(event, index, slot)}
-                            className="absolute right-2 top-2 rounded-full bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-200 transition hover:bg-slate-800"
-                          >
-                            Remove
-                          </button>
-                        ) : null}
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 flex flex-col gap-3">
-        <button
-          type="button"
-          onClick={addPhotoPair}
-          className="inline-flex items-center justify-center rounded-full border border-slate-700 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-200 transition hover:border-slate-500 hover:text-white"
-        >
-          Add photo pair
-        </button>
+            );
+          })}
+        </div>
         {hasIncompletePair ? (
-          <p className="text-[11px] text-amber-300">
+          <p className="mt-3 text-[11px] text-amber-300">
             Add both top and bottom photos for every pair to enable seamless cuts.
           </p>
-        ) : null}
+        ) : (
+          <p className="mt-3 text-[11px] text-slate-500">Ready pairs will render sequentially in the export.</p>
+        )}
       </div>
+
+      {mediaModal}
 
       <div className="mt-5 flex flex-col gap-3 rounded-xl bg-slate-950/40 p-4">
         <div className="flex items-center justify-between">
